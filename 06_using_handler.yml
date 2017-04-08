@@ -1,0 +1,178 @@
+---
+# ハンドラーを利用する
+# ----------------------------------
+#
+# Ansibleのタスクには `notify`という属性を追加してコールバック処理を呼ぶよう設定できます。
+# `notify`はタスクで状態に変更があった場合に、`notify`に指定された`handler`が実行されます。
+#
+# * handler： notifyから呼び出される処理を定義します。
+# * notify：タスクの変更かあった場合に呼び出したい処理を指定する
+#
+# notifyから同じ内容のhandlerが、複数呼び出された場合でも１度だけしか実行されません。
+#
+# 主な利用方法として、設定ファイルの変更を検知し、
+# サービスの設定の再読込や再起動を行う実行したい場合に利用します。
+#
+# Playbookのサンプル
+# ---------------------
+- hosts: all
+  vars:
+    admin_group: adm
+    users:
+      - name: wate
+        group: "{{ admin_group }}"
+        password: hogehoge
+      - name: sperkbird
+        group: "{{ admin_group }}"
+        password: fugafuga
+      - name: 223n
+        password: foofoo
+      - name: nogajun
+        password: barbar
+    base_packages:
+      - firewalld
+      - fail2ban
+      - fail2ban-firewalld
+      - fail2ban-server
+      - vim
+      - bash-completion
+      - expect
+      - git
+      - etckeeper
+      - tig
+    mackerel_agent:
+      # 以下の「YOUR-MACKEREL-API-KEY」を実際のAPIキーに変更してください
+      api_key: YOUR-MACKEREL-API-KEY
+      install_plugin: true
+      install_check_plugin: false
+    active_services:
+      - firewalld
+      - fail2ban
+      - mackerel-agent
+  # handlerを定義する
+  handlers:
+    - name: restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
+    - name: restart mackerel-agent
+      service:
+        name: mackerel-agent
+        state: restarted
+  tasks:
+    - name: Ensure admin group exists
+      group:
+        name: "{{ admin_group }}"
+        state: present
+    - name: Ensure user exists
+      user:
+        name: "{{ item.name }}"
+        group: "{{ item.group|default(omit) }}"
+        password: "{{ item.password|password_hash('sha512') }}"
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure user accepts the SSH key
+      authorized_key:
+        user: "{{ item.name }}"
+        key: https://github.com/{{ item.name }}.keys
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure admin group is sudoer with no password required
+      lineinfile:
+        create: true
+        dest: /etc/sudoers.d/admin
+        state: present
+        line: '%{{ admin_group }} ALL=(ALL) NOPASSWD:ALL'
+        validate: 'visudo -cf %s'
+    - name: Ensure EPEL is installed
+      yum:
+        name: epel-release
+        state: present
+    - name: Ensure base package is installed
+      yum:
+        name: "{{ item }}"
+        enablerepo: epel
+        state: latest
+      with_items: "{{ base_packages }}"
+    - block:
+      - name: initialize etckeeper
+        command: etckeeper init
+        args:
+          creates: /etc/.git
+        register: result
+      - name: set system-wide git config
+        git_config:
+          name: "{{ item.name }}"
+          value: "{{ item.value }}"
+          scope: system
+        with_items:
+          - name: user.name
+            value: system administrator
+          - name: user.email
+            value: ansible@hands.on
+      - name: etckeeper initial commit
+        command: etckeeper commit init
+        when: result|changed
+      when: "'etckeeper' in base_packages"
+    - name: Ensure mackerel GPG key is imported
+      rpm_key:
+        key: https://mackerel.io/assets/files/GPG-KEY-mackerel
+    - name: Ensure mackerel repository is installed
+      yum_repository:
+        name: mackerel
+        description: mackerel-agent
+        baseurl: http://yum.mackerel.io/centos/$basearch
+        gpgcheck: true
+    - name: Ensure mackerel-agent is installed
+      yum:
+        name: mackerel-agent
+        state: latest
+    - name: Ensure mackerel plugin is installed
+      yum:
+        name: mackerel-agent-plugins
+        state: latest
+      when: mackerel_agent.install_plugin
+    - name: Ensure mackerel check plugin is installed
+      yum:
+        name: mackerel-check-plugins
+        state: latest
+      when: mackerel_agent.install_check_plugin
+    - name: Create mackerel-agent config file
+      template:
+        src: mackerel-agent.conf.j2
+        dest: /etc/mackerel-agent/mackerel-agent.conf
+        owner: root
+        group: root
+      # 「/etc/mackerel-agent/mackerel-agent.conf」の変更があった場合は、
+      # 「(handlerで定義されている)restart mackerel-agent」を実行する
+      notify: restart mackerel-agent
+    - name: Ensure fail2ban log file exists
+      file:
+        path: /var/log/fail2ban.log
+        owner: root
+        group: root
+        state: touch
+    - name: Ensure fail2ban value of the logtarget option is equal to /var/log/fail2ban.log
+      ini_file:
+        dest: /etc/fail2ban/fail2ban.conf
+        section: Definition
+        option: logtarget
+        value: /var/log/fail2ban.log
+      # 「/etc/fail2ban/fail2ban.conf」の変更があった場合は、
+      # 「(handlerで定義されている)restart fail2ban」を実行する
+      notify: restart fail2ban
+    - name: Copy fail2ban jail setting file
+      copy:
+        dest: /etc/fail2ban/jail.d/local.conf
+        src: local.conf
+        owner: root
+        group: root
+      # 「/etc/fail2ban/fail2ban.conf」の変更があった場合は、
+      # 「(handlerで定義されている)restart fail2ban」を実行する
+      notify: restart fail2ban
+    - name: Ensure service is enabled and running
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      with_items: "{{ active_services }}"

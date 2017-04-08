@@ -1,0 +1,84 @@
+---
+# 変数を利用する
+# ----------------------------------
+#
+# Playbookで変数を定義する場合は、`vars`を追加し変数を定義します。
+# 定義した変数を利用する場合は、`{{`と`}}`で変数名を囲むことにより変数の内容が展開されます。
+#
+# Playbook内で変数利用する場合の注意点として、
+# パラメーターなどの指定部が、変数から始まる場合は、
+# YAMLのハッシュ構文と区別するため、行全体を引用符で囲んむ必要があります。
+#
+# 変数はPlayook内で定義する以外にも、以下の箇所で変数が定義することができます。
+#
+# * インベントリ
+# * インクルードファイル
+# * ロール
+#
+# 同じ変数名が複数の箇所で定義されている場合、
+# 指定の優先順位に従い優先度の高い変数の内容が展開されます。
+#
+# 変数の優先順位
+# http://docs.ansible.com/ansible/playbooks_variables.html#variable-precedence-where-should-i-put-a-variable
+#
+# 上記のように、ユーザーが任意に定義した変数以外にも、
+# Ansibleが自動的に定義する定義済み変数があります。
+#
+# 定義済み偏すとして以下のものがあります。
+#
+# * システム情報変数
+# * マジック変数
+#
+# ### システム情報変数
+#
+# システム情報変数は、Ansibleがリモートホストから取得した情報を
+# ansible_*で始まる変数として定義されています。
+# 主にタスクを実行するかどうかの条件分岐の判定に利用します。
+# (※条件分岐に関する内容はもう少し後で触れます)
+#
+# システム情報変数の内容は以下のコマンドを実行することで確認できます。
+#
+# ```
+# ansible <ホスト名> -m setup
+# ```
+#
+# ### マジック変数
+#
+# インベントリに定義してあるホストやグループの情報を、
+# hostvarsなど決められた変数に格納しています。
+#
+# マジック変数に関しては、以下のURLを参照してもらって方が早いかも？
+# ※個人的には{{ inventory_hostname }}くらいしか使いどころがねぇっす
+#
+# Ansibleマジック変数の一覧と内容
+# http://qiita.com/h2suzuki/items/15609e0de4a2402803e9
+#
+# Ansibleの変数に関する詳細は、以下の公式ドキュメントを参照してください
+# http://docs.ansible.com/ansible/playbooks_variables.html
+#
+# Playbookのサンプル
+# ---------------------
+- hosts: all
+  vars:
+    user:
+      name: wate
+      password: hogehoge
+  tasks:
+    - name: Ensure user exists
+      user:
+        name: "{{ user.name }}"
+        password: "{{ user.password|password_hash('sha512') }}"
+        state: present
+    - name: Ensure user accepts the SSH key
+      authorized_key:
+        user: "{{ user.name }}"
+        key: https://github.com/{{ user.name }}.keys
+        state: present
+    - name: Ensure the user is sudoer with no password required
+      lineinfile:
+        create: true
+        dest: /etc/sudoers.d/using_variables
+        state: present
+        regexp: '^{{ user.name }} ALL\='
+        line: '{{ user.name }} ALL=(ALL) NOPASSWD:ALL'
+        validate: 'visudo -cf %s'

@@ -1,0 +1,144 @@
+---
+# 条件分岐を利用する
+# ----------------------------------
+#
+# 複数のリモートホストを管理する場合、
+# 特定の条件に一致する場合のみ、特定のタスクを実行したいといった場合もあります。
+#
+# その場合、実行するタスクに`when`ステートメントを記載することにより、
+# タスクの実行するかどうかを制御することができます。
+#
+# `when`ステートメントを指定した場合、記載された条件に一致する場合のみタスクが実行されます。
+# 
+# `when`ステートメントには、二重中括弧無しのjinja2形式でタスクの実行条件を記載します。
+#
+# 例：
+# ```
+# - debug:
+#     msg: "もう、サポート切れてるんですが・・・・"
+#   when: ansible_distribution == "CentOS" and ansible_distribution_major_version <= 5
+# ```
+#
+# 上記の例以外にも、直前のタスクの実行状況などを元にした条件なども指定することができます。
+#
+# Ansibleの条件分岐に関する詳細は、以下の公式ドキュメントを参照してください
+# http://docs.ansible.com/ansible/playbooks_conditionals.html
+#
+# Playbookのサンプル
+# ---------------------
+- hosts: all
+  vars:
+    admin_group: adm
+    users:
+      - name: wate
+        group: "{{ admin_group }}"
+        password: hogehoge
+      - name: sperkbird
+        group: "{{ admin_group }}"
+        password: fugafuga
+      - name: 223n
+        password: foofoo
+      - name: nogajun
+        password: barbar
+    base_packages:
+      - firewalld
+      - fail2ban
+      - fail2ban-firewalld
+      - fail2ban-server
+      - vim
+      - bash-completion
+      - expect
+      - git
+      - etckeeper
+      - tig
+    mackerel_agent:
+      api_key: YOUR-MACKEREL-API-KEY
+      install_plugin: true
+      install_check_plugin: false
+    active_services:
+      - firewalld
+      - fail2ban
+  tasks:
+    - name: Ensure admin group exists
+      group:
+        name: "{{ admin_group }}"
+        state: present
+    - name: Ensure user exists
+      user:
+        name: "{{ item.name }}"
+        group: "{{ item.group|default(omit) }}"
+        password: "{{ item.password|password_hash('sha512') }}"
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure user accepts the SSH key
+      authorized_key:
+        user: "{{ item.name }}"
+        key: https://github.com/{{ item.name }}.keys
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure admin group is sudoer with no password required
+      lineinfile:
+        create: true
+        dest: /etc/sudoers.d/admin
+        state: present
+        line: '%{{ admin_group }} ALL=(ALL) NOPASSWD:ALL'
+        validate: 'visudo -cf %s'
+    - name: Ensure EPEL is installed
+      yum:
+        name: epel-release
+        state: present
+    - name: Ensure base package is installed
+      yum:
+        name: "{{ item }}"
+        enablerepo: epel
+        state: latest
+      with_items: "{{ base_packages }}"
+    - block:
+      - name: initialize etckeeper
+        command: etckeeper init
+        args:
+          creates: /etc/.git
+        register: result
+      - name: set system-wide git config
+        git_config:
+          name: "{{ item.name }}"
+          value: "{{ item.value }}"
+          scope: system
+        with_items:
+          - name: user.name
+            value: system administrator
+          - name: user.email
+            value: ansible@hands.on
+      - name: etckeeper initial commit
+        command: etckeeper commit init
+        when: result|changed
+      when: "'etckeeper' in base_packages"
+    - name: Ensure mackerel GPG key is imported
+      rpm_key:
+        key: https://mackerel.io/assets/files/GPG-KEY-mackerel
+    - name: Ensure mackerel repository is installed
+      yum_repository:
+        name: mackerel
+        description: mackerel-agent
+        baseurl: http://yum.mackerel.io/centos/$basearch
+        gpgcheck: true
+    - name: Ensure mackerel-agent is installed
+      yum:
+        name: mackerel-agent
+        state: latest
+    - name: Ensure mackerel plugin is installed
+      yum:
+        name: mackerel-agent-plugins
+        state: latest
+      when: mackerel_agent.install_plugin
+    - name: Ensure mackerel check plugin is installed
+      yum:
+        name: mackerel-check-plugins
+        state: latest
+      when: mackerel_agent.install_check_plugin
+    - name: Ensure service is enabled and running
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      with_items: "{{ active_services }}"

@@ -1,0 +1,54 @@
+---
+# Playbook
+# ----------------------------------
+# サーバーの状態をPlaybookと呼ばれる、YAML形式のファイルに定義します。
+# Playbookにはリモートホストの状態を定義します。
+#
+# YAML形式に関しては以下のサイトなどを参照してください。
+#
+# * [プログラマーのためのYAML入門 (初級編)](http://magazine.rubyist.net/?0009-YAML)
+# * [YAML入門 (全11回) - プログラミングならドットインストール](http://dotinstall.com/lessons/basic_yaml_v2)
+#
+# Playbookのサンプル
+# ---------------------
+# `hosts`にはグループ名またはをホスト名を指定します。
+# すべてのリモートホストに実行したい場合は、`all`を指定します。
+- hosts: all
+  # `tasks`以下にサーバの状態を定義します。
+  # Playbookでロールを利用しない場合は、単一ファイルになることで管理やメンテナンスがしにくくなります。
+  # ロールを利用する方が再利用性も高くなるため、単発でコマンドを流したいようなケースを除き、
+  # 基本的にはロールを利用しましょう。
+  tasks:
+    # サーバーの状態はモジュールを利用しサーバーの状態を定義します。
+    # 利用可能なモジュールは公式サイトの以下のURLより調べることでができます。
+    #
+    # http://docs.ansible.com/ansible/modules_by_category.html
+    #
+    # サーバーの状態は以下のように記載します。
+    # `name`は必須ではありませんが、できるだけ記載するようにしましょう
+    #
+    # 以下の内容は、サーバー管理用のユーザーの例です
+    - name: Ensure manager user exists
+      user:
+        name: manager
+        password: "{{ 'set_login_P@ssw0rd_here'|password_hash('sha512') }}"
+        # ※パスワードをpassword_hashフィルターを使ってハッシュに変換しています。
+        # password_hashを利用する場合、pipでpasslibをインストールする必要があります
+        state: present
+    - name: Ensure manager user accepts the SSH key
+      authorized_key:
+        user: manager
+        # Githubに登録している公開鍵を利用する場合
+        # ※以下の`wate`の部分を自分のアカウント名に書き換えてね
+        key: https://github.com/wate.keys
+        # 手元のPC内に保存している公開鍵を利用する場合
+        # key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        state: present
+    - name: Ensure the manager user is sudoer with no password required
+      lineinfile:
+        create: true
+        dest: /etc/sudoers.d/first_run
+        state: present
+        regexp: '^manager ALL\='
+        line: 'manager ALL=(ALL) NOPASSWD:ALL'
+        validate: 'visudo -cf %s'

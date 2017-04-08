@@ -1,0 +1,118 @@
+---
+# 繰り返し処理を利用する
+# ----------------------------------
+#
+# 繰り返しタスクは`with_**`を利用し、以下のように短く書くことができます。
+#
+# ```
+# - name: sample loop tasks
+#   debug:
+#     msg: "{{ item }}"
+#   with_items:
+#     - one
+#     - two
+#     - three
+# ```
+#
+# 利用できるものは、以下のようなものがあります
+#
+# ### with_items
+#
+# 一つのモジュールを何度も繰り返したいときに使用します。
+#
+# http://docs.ansible.com/ansible/playbooks_loops.html#standard-loops
+#
+# ### with_fileglob
+#
+# 指定されたファイル名のパターンマッチングを行い、
+# パターンに一致するファイルに対して、繰り返し処理を行います。
+# 複数のcopyモジュールやtemplateモジュールを利用し、リモートホストに配置する場合などに利用します。
+#
+# http://docs.ansible.com/ansible/playbooks_loops.html#id4
+#
+# ※管理ホスト(Ansibleを実行しているマシン)側のファイルに対して検索を行います。
+# リモートホスト側のファイルではないことに注意してください
+#
+# ### with_subelements
+#
+# 個人的にはコードが読みにくくなるんで使わねぇっす
+# 多分、以下の記事を読むのが手っ取り早いかも
+#
+# * [サブ要素をループするAnsibleのwith_subelements](http://dev.classmethod.jp/server-side/ansible/looping_over_subelements/)
+#
+# Ansibleの繰り返し処理に関する詳細は、以下の公式ドキュメントを参照してください
+# http://docs.ansible.com/ansible/playbooks_loops.html
+#
+# Playbookのサンプル
+# ---------------------
+- hosts: all
+  vars:
+    users:
+      - name: wate
+        password: hogehoge
+      - name: sperkbird
+        password: fugafuga
+      - name: 223n
+        password: foofoo
+      - name: nogajun
+        password: barbar
+    base_packages:
+      - firewalld
+      - fail2ban
+      - fail2ban-firewalld
+      - fail2ban-server
+      - vim
+      - bash-completion
+      - expect
+      - git
+      - etckeeper
+      - tig
+    active_services:
+      - firewalld
+      - fail2ban
+  tasks:
+    - name: Ensure user exists
+      user:
+        name: "{{ item.name }}"
+        password: "{{ item.password|password_hash('sha512') }}"
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure user accepts the SSH key
+      authorized_key:
+        user: "{{ item.name }}"
+        key: https://github.com/{{ item.name }}.keys
+        state: present
+      with_items: "{{ users }}"
+    - name: Ensure admin users is sudoer with no password required
+      lineinfile:
+        create: true
+        dest: /etc/sudoers.d/using_loop
+        regexp: '^{{ item.name }} ALL\='
+        line: '{{ item.name }} ALL=(ALL) NOPASSWD:ALL'
+        state: present
+        validate: 'visudo -cf %s'
+      with_items: "{{ users }}"
+    - name: Ensure EPEL is installed
+      yum:
+        name: epel-release
+        state: present
+    - name: Ensure base package is installed
+      yum:
+        name: "{{ item }}"
+        enablerepo: epel
+        state: latest
+      with_items: "{{ base_packages }}"
+    - name: Ensure service is enabled and running
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      with_items: "{{ active_services }}"
+
+
+# 補足資料
+# -----------------
+# パスワード情報を別ファイルで管理する例に関しては、以下の記事を参考にしてください
+#
+# AnsibleでCSVファイルから参照したパスワードでプロビジョニングする
+# http://dev.classmethod.jp/server-side/ansible/using_password_by_csv_file/
